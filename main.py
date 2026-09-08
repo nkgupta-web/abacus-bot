@@ -1,4 +1,6 @@
+import os
 import logging
+from aiohttp import web
 from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
@@ -25,10 +27,13 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+async def handle_ping(request):
+    return web.Response(text="Abacus Bot is running smoothly!")
+
 async def post_init(application) -> None:
     await init_db()
     
-    # Telegram menu button me commands register karna
+    # Telegram menu button commands
     commands = [
         BotCommand("game", "Start multiplayer math game"),
         BotCommand("profile", "View your Level, Badge and XP"),
@@ -38,12 +43,23 @@ async def post_init(application) -> None:
     ]
     await application.bot.set_my_commands(commands)
     
+    # Render ke liye dummy web server start karna
+    server = web.Application()
+    server.router.add_get("/", handle_ping)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    logging.info(f"Dummy web server running on port {port} for Render.")
     logging.info("Abacus game database initialized & commands registered successfully.")
 
 def main() -> None:
     app = (
         ApplicationBuilder()
-        .token(BOT_TOKEN)
+        .token(BOT_TOKEN.strip())
         .post_init(post_init)
         .build()
     )

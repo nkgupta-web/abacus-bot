@@ -3,7 +3,7 @@ from typing import Dict
 import os
 
 # Keep your bot token in an environment variable.
-BOT_TOKEN: str = os.getenv("8705986554:AAHy3PhzeTIxHzU7gm3x1PVAPY2mAOejkQI")
+BOT_TOKEN: str = "8705986554:AAHy3PhzeTIxHzU7gm3x1PVAPY2mAOejkQI"
 DB_PATH: str = "abacus_game.db"
 
 # Maximum number of digits allowed in a single number.
