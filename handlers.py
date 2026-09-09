@@ -78,7 +78,7 @@ async def start_new_round(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> N
     session = game_manager.get_session(chat_id)
     async with session.lock:
         level = session.current_level
-        spec = LEVEL_SPECS.get(level, LEVEL_SPECS[15])
+        spec = LEVEL_SPECS.get(level, LEVEL_SPECS[20])
         question_text, answer = generate_question(level)
 
         msg_text = (
@@ -179,7 +179,6 @@ async def handle_message_answer(update: Update, context: ContextTypes.DEFAULT_TY
 
     chat = update.effective_chat
     user = update.effective_user
-    print(f"[{chat.title or 'Private'}] {user.first_name}: {message.text}")
 
     clean_text = (
         message.text.strip()
@@ -211,7 +210,7 @@ async def handle_message_answer(update: Update, context: ContextTypes.DEFAULT_TY
         if active.task:
             active.task.cancel()
 
-        level_spec = LEVEL_SPECS.get(active.question_level, LEVEL_SPECS[15])
+        level_spec = LEVEL_SPECS.get(active.question_level, LEVEL_SPECS[20])
         xp_gain = level_spec.base_xp
 
         username_val = user.username or user.first_name
@@ -223,14 +222,14 @@ async def handle_message_answer(update: Update, context: ContextTypes.DEFAULT_TY
 
         username_display = f"@{user.username}" if user.username else user.first_name
 
-        if session.current_level >= 15:
+        if session.current_level >= 20:
             is_session_complete = True
             win_text = (
                 f"🏆 {username_display}\n\n"
                 f"✅ Correct Answer!\n\n"
                 f"⭐ +{xp_gain} XP\n"
                 f"✅ Total Correct: {updated_player['correct_answers']}\n\n"
-                f"👑 ALL 15 LEVELS COMPLETED! VICTORY!"
+                f"👑 ALL 20 LEVELS COMPLETED! VICTORY!"
             )
         else:
             win_text = (
@@ -261,3 +260,45 @@ async def handle_message_answer(update: Update, context: ContextTypes.DEFAULT_TY
         session.current_level += 1
 
     await start_new_round(chat.id, context)
+
+async def restore_xp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or not user.username or user.username.lower() != "doomsday_18_dec":
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("Format: /setxp <username> <xp>")
+        return
+
+    target_user = context.args[0].replace("@", "").strip()
+    try:
+        new_xp = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Invalid XP number!")
+        return
+
+    import aiosqlite
+    from config import DB_PATH
+    from player_system import calculate_player_level
+
+    new_lvl = calculate_player_level(new_xp)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT user_id FROM players WHERE LOWER(username) = LOWER(?)", 
+            (target_user,)
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row:
+            await db.execute(
+                "UPDATE players SET total_xp = ? WHERE LOWER(username) = LOWER(?)",
+                (new_xp, target_user)
+            )
+            await db.commit()
+            await update.message.reply_text(f"✅ @{target_user} ka XP = {new_xp} (Level {new_lvl}) update ho gaya!")
+        else:
+            await update.message.reply_text(
+                f"❌ Player @{target_user} database me nahi mila.\n"
+                f"Use bolo ek baar group me koi question answer kare, fir command chalao."
+            )

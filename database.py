@@ -58,3 +58,13 @@ async def get_leaderboard(limit: int = 10) -> List[Dict[str, Any]]:
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+async def set_player_xp(username: str, new_xp: int) -> bool:
+    clean_user = username.replace("@", "").strip()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE players SET total_xp = ? WHERE LOWER(username) = LOWER(?)",
+            (new_xp, clean_user)
+        )
+        await db.commit()
+        return cursor.rowcount > 0

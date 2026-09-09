@@ -31,12 +31,11 @@ class GameManager:
     async def end_session(self, chat_id: int) -> None:
         if chat_id in self.sessions:
             session = self.sessions[chat_id]
-            async with session.lock:
-                current_task = asyncio.current_task()
-                if session.active_round and session.active_round.task:
-                    if session.active_round.task != current_task:
-                        session.active_round.task.cancel()
-                session.active_round = None
+            current_task = asyncio.current_task()
+            if session.active_round and session.active_round.task:
+                if session.active_round.task != current_task:
+                    session.active_round.task.cancel()
+            session.active_round = None
             del self.sessions[chat_id]
 
     async def start_timer(
