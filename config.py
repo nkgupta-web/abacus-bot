@@ -126,7 +126,7 @@ def _build_level_rule(level: int) -> LevelRule:
 # -------------------------------------------------------------
 # BUILD LEVEL TABLE
 # -------------------------------------------------------------
-MAX_LEVEL = 50
+MAX_LEVEL = 100
 
 LEVEL_SPECS: Dict[int, LevelRule] = {
     level: _build_level_rule(level)
