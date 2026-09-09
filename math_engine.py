@@ -1,183 +1,94 @@
-import ast
-import random
-from collections import deque
-from typing import Tuple, Optional, Deque, List
-from dataclasses import dataclass
+import os
+import asyncio
+import logging
+from aiohttp import web
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
 
-_recent_questions: Deque[str] = deque(maxlen=80)
+from config import BOT_TOKEN
+from database import init_db
+from handlers import (
+    cmd_start,
+    cmd_help,
+    cmd_profile,
+    cmd_leaderboard,
+    cmd_game,
+    cmd_cancel,
+    on_restart_callback,
+    handle_message_answer,
+    restore_xp_command,
+)
 
-@dataclass(frozen=True)
-class QuestionDifficultyRule:
-    max_digits: int
-    total_ops: int
-    high_ops: int
-    max_parens: int
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-# =========================================================
-# EXACT 20 QUESTION LEVELS (Q1 - Q20)
-# =========================================================
-QUESTION_LEVEL_SPECS = {
-    1:  QuestionDifficultyRule(max_digits=1, total_ops=1,  high_ops=0, max_parens=0),
-    2:  QuestionDifficultyRule(max_digits=1, total_ops=2,  high_ops=0, max_parens=0),
-    3:  QuestionDifficultyRule(max_digits=2, total_ops=2,  high_ops=1, max_parens=0),
-    4:  QuestionDifficultyRule(max_digits=2, total_ops=3,  high_ops=1, max_parens=0),
-    5:  QuestionDifficultyRule(max_digits=2, total_ops=4,  high_ops=1, max_parens=0),
-    6:  QuestionDifficultyRule(max_digits=2, total_ops=4,  high_ops=2, max_parens=0),
-    7:  QuestionDifficultyRule(max_digits=3, total_ops=5,  high_ops=2, max_parens=0),
-    8:  QuestionDifficultyRule(max_digits=3, total_ops=6,  high_ops=2, max_parens=0),
-    9:  QuestionDifficultyRule(max_digits=3, total_ops=6,  high_ops=3, max_parens=0),
-    10: QuestionDifficultyRule(max_digits=3, total_ops=7,  high_ops=3, max_parens=1),
-    11: QuestionDifficultyRule(max_digits=4, total_ops=7,  high_ops=3, max_parens=1),
-    12: QuestionDifficultyRule(max_digits=4, total_ops=8,  high_ops=4, max_parens=1),
-    13: QuestionDifficultyRule(max_digits=4, total_ops=8,  high_ops=4, max_parens=1),
-    14: QuestionDifficultyRule(max_digits=4, total_ops=9,  high_ops=5, max_parens=2),
-    15: QuestionDifficultyRule(max_digits=4, total_ops=9,  high_ops=5, max_parens=2),
-    16: QuestionDifficultyRule(max_digits=4, total_ops=10, high_ops=5, max_parens=2),
-    17: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=5, max_parens=3),
-    18: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-    19: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-    20: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-}
 
-def safe_bodmas_eval(expr_str: str) -> Optional[int]:
-    clean_expr = (
-        expr_str.replace("×", "*")
-        .replace("÷", "/")
-        .replace("−", "-")
-        .replace("—", "-")
-        .replace("–", "-")
+# Render ke health check ke liye dummy HTTP server
+async def handle_ping(request):
+    return web.Response(text="Abacus Bot is Running!")
+
+
+async def start_dummy_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = web.Application()
+    server.router.add_get("/", handle_ping)
+    server.router.add_get("/healthz", handle_ping)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health check web server running on port {port}")
+
+
+async def main():
+    # 1. Database initialize
+    await init_db()
+    logger.info("Database initialized successfully.")
+
+    # 2. Telegram Bot App build
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Core Handlers
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("profile", cmd_profile))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("game", cmd_game))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+
+    # Admin Restore Command
+    app.add_handler(CommandHandler("setxp", restore_xp_command))
+
+    # Callback & Answers
+    app.add_handler(CallbackQueryHandler(on_restart_callback, pattern="^start_game$"))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message_answer)
     )
+
+    # 3. Start dummy web server for Render Free Web Service
+    await start_dummy_web_server()
+
+    # 4. Start polling
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    logger.info("Abacus Bot polling started successfully!")
+
+    # Infinite loop to keep bot running
+    while True:
+        await asyncio.sleep(3600)
+
+
+if __name__ == "__main__":
     try:
-        node = ast.parse(clean_expr, mode='eval')
-        def _eval(n):
-            if isinstance(n, ast.Expression):
-                return _eval(n.body)
-            elif isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
-                return n.value
-            elif isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.USub):
-                return -_eval(n.operand)
-            elif isinstance(n, ast.BinOp):
-                left = _eval(n.left)
-                right = _eval(n.right)
-                if isinstance(n.op, ast.Add):
-                    return left + right
-                elif isinstance(n.op, ast.Sub):
-                    return left - right
-                elif isinstance(n.op, ast.Mult):
-                    return left * right
-                elif isinstance(n.op, ast.Div):
-                    if right == 0 or left % right != 0:
-                        raise ValueError("Non-integer division")
-                    return left // right
-            raise ValueError("Invalid AST")
-        return int(_eval(node))
-    except Exception:
-        return None
-
-def get_number(level: int, digits_max: int, is_multiplier: bool = False, is_divisor: bool = False) -> int:
-    if is_divisor:
-        if digits_max <= 2:
-            return random.randint(2, 9)
-        elif digits_max == 3:
-            return random.randint(3, 20)
-        elif digits_max == 4:
-            return random.randint(5, 50)
-        else:
-            return random.randint(12, 99)
-
-    if is_multiplier:
-        if digits_max == 1:
-            return random.randint(2, 9)
-        if digits_max <= 3:
-            return random.randint(2, 12)
-        return random.randint(15, 60) if level >= 18 else random.randint(3, 25)
-
-    if digits_max == 1:
-        return random.randint(1, 9)
-
-    low = 10 ** (digits_max - 1)
-    high = (10 ** digits_max) - 1
-
-    if level == 19:
-        low = max(low, 35000)
-    elif level == 20:
-        low = max(low, 65000)
-
-    return random.randint(low, high)
-
-def pick_operator_slots(total_ops: int, high_count: int, level: int) -> List[str]:
-    low_count = total_ops - high_count
-    ops = (["HIGH"] * high_count) + (["LOW"] * low_count)
-    random.shuffle(ops)
-
-    concrete_ops = []
-    for item in ops:
-        if item == "HIGH":
-            if level == 20:
-                concrete_ops.append("×" if random.random() < 0.70 else "÷")
-            else:
-                concrete_ops.append(random.choice(["×", "÷"]))
-        else:
-            concrete_ops.append(random.choice(["+", "−"]))
-    return concrete_ops
-
-def apply_parentheses(tokens: List[str], max_parens: int) -> List[str]:
-    if max_parens <= 0 or len(tokens) < 5:
-        return tokens
-
-    result = list(tokens)
-    applied = 0
-    attempts = 0
-
-    while applied < max_parens and attempts < 15:
-        attempts += 1
-        start_idx = random.randrange(0, len(result) - 2, 2)
-        end_idx = start_idx + 2
-
-        if not result[start_idx].startswith("(") and not result[end_idx].endswith(")"):
-            result[start_idx] = "(" + result[start_idx]
-            result[end_idx] = result[end_idx] + ")"
-            applied += 1
-
-    return result
-
-def generate_question(level: int) -> Tuple[str, int]:
-    q_level = max(1, min(20, int(level)))
-    rule = QUESTION_LEVEL_SPECS[q_level]
-
-    for _ in range(1200):
-        ops = pick_operator_slots(rule.total_ops, rule.high_ops, q_level)
-        tokens: List[str] = [str(get_number(q_level, rule.max_digits))]
-
-        for op in ops:
-            if op == "÷":
-                divisor = get_number(q_level, rule.max_digits, is_divisor=True)
-                tokens.append("÷")
-                tokens.append(str(divisor))
-            elif op == "×":
-                multiplier = get_number(q_level, rule.max_digits, is_multiplier=True)
-                tokens.append("×")
-                tokens.append(str(multiplier))
-            else:
-                tokens.append(op)
-                tokens.append(str(get_number(q_level, rule.max_digits)))
-
-        if rule.max_parens > 0:
-            tokens = apply_parentheses(tokens, rule.max_parens)
-
-        raw_expr = " ".join(tokens)
-        ans = safe_bodmas_eval(raw_expr)
-
-        if ans is None:
-            continue
-
-        if q_level <= 6 and ans < 0:
-            continue
-
-        if raw_expr in _recent_questions:
-            continue
-
-        _recent_questions.append(raw_expr)
-        return f"{raw_expr} = ?", ans
-
-    return "25 + 35 = ?", 60
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
