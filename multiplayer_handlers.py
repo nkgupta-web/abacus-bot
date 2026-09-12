@@ -6,7 +6,7 @@ from telegram.constants import ChatType
 
 from config import LEVEL_SPECS
 from math_engine import generate_question
-from database import add_xp, get_player
+from database import record_correct_answer, get_or_create_player
 from multiplayer_mgr import multiplayer_manager, RoomTurn, RoomPlayer
 
 def get_room_lobby_markup(chat_id: int) -> InlineKeyboardMarkup:
@@ -296,10 +296,8 @@ async def handle_mp_message_answer(update: Update, context: ContextTypes.DEFAULT
             return False
 
         if val != turn.correct_answer:
-            # Wrong answer is allowed, player continues till timeout
             return True
 
-        # Correct answer
         turn.is_resolved = True
         if turn.timer_task:
             turn.timer_task.cancel()
@@ -310,11 +308,11 @@ async def handle_mp_message_answer(update: Update, context: ContextTypes.DEFAULT
 
         room.current_turn_index += 1
 
-    # Level XP award
+    # Instant XP award
     effective_lvl = min(20, room.current_level)
     spec = LEVEL_SPECS.get(effective_lvl, LEVEL_SPECS[20])
     earned_xp = spec.xp_reward
-    await add_xp(user_id, earned_xp)
+    await record_correct_answer(user_id, player.username, earned_xp)
 
     await message.reply_text(
         f"✅ *CORRECT!* {player.first_name} ne `{time_taken}s` me solve kiya!\n"
@@ -362,9 +360,8 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
 
             if len(winners) == 1:
                 w = winners[0]
-                # Winner Bonus XP
                 bonus_xp = room.initial_player_count * completed_level * 10
-                await add_xp(w.user_id, bonus_xp)
+                await record_correct_answer(w.user_id, w.username, bonus_xp)
 
                 text = (
                     f"💥 *Q{completed_level} ME SABHI ELIMINATE HO GAYE!*\n\n"
@@ -378,7 +375,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
                 joint_names = " & ".join([f"*{w.first_name}*" for w in winners])
                 bonus_xp = (room.initial_player_count * completed_level * 10) // len(winners)
                 for w in winners:
-                    await add_xp(w.user_id, bonus_xp)
+                    await record_correct_answer(w.user_id, w.username, bonus_xp)
 
                 text = (
                     f"💥 *Q{completed_level} ME SABHI ELIMINATE HO GAYE!*\n\n"
@@ -397,7 +394,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
         if len(survivors) == 1:
             winner = survivors[0]
             bonus_xp = room.initial_player_count * completed_level * 15
-            await add_xp(winner.user_id, bonus_xp)
+            await record_correct_answer(winner.user_id, winner.username, bonus_xp)
 
             text = (
                 f"🏆 *VICTORY! LAST PLAYER STANDING!*\n\n"
