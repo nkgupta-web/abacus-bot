@@ -137,14 +137,45 @@ async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("This command must be run inside a group!")
         return
 
-    session = game_manager.get_session(chat.id)
-    async with session.lock:
-        if session.active_round and not session.active_round.is_resolved:
-            await update.message.reply_text("A game is already in progress!")
-            return
-        session.current_level = 1
+    keyboard = [
+        [
+            InlineKeyboardButton("⚡ Solo Classic", callback_data="mode_classic"),
+            InlineKeyboardButton("👑 Battle Royale Room", callback_data="mode_room")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await start_new_round(chat.id, context)
+    await update.message.reply_text(
+        "🎮 *SELECT GAME MODE*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚡ *Solo Classic:* Normal open-chat speed race.\n"
+        "👑 *Battle Royale Room:* Turn-by-turn elimination room.\n\n"
+        "Choose a mode to play:",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+
+async def on_mode_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "mode_classic":
+        chat_id = query.message.chat_id
+        session = game_manager.get_session(chat_id)
+        async with session.lock:
+            if session.active_round and not session.active_round.is_resolved:
+                await query.edit_message_text("⚠️ A classic game is already in progress!")
+                return
+            session.current_level = 1
+
+        await query.edit_message_text("⚡ Starting Classic Game...")
+        await start_new_round(chat_id, context)
+
+    elif query.data == "mode_room":
+        await query.delete_message()
+        from multiplayer_handlers import cmd_create_room
+        await cmd_create_room(update, context)
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
