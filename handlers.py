@@ -155,7 +155,6 @@ async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=reply_markup
     )
 
-
 async def on_mode_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -174,8 +173,49 @@ async def on_mode_select_callback(update: Update, context: ContextTypes.DEFAULT_
 
     elif query.data == "mode_room":
         await query.delete_message()
-        from multiplayer_handlers import cmd_create_room
-        await cmd_create_room(update, context)
+        from multiplayer_handlers import multiplayer_manager, get_room_lobby_markup
+        
+        chat = update.effective_chat
+        user = update.effective_user
+
+        if chat.type == ChatType.PRIVATE:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="Room mode group chats ke liye hai! Mujhe kisi group me add karke `/game` try karo."
+            )
+            return
+
+        if multiplayer_manager.get_room(chat.id):
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="⚠️ Is group me already ek room chal raha hai! Use cancel karne ke liye host `/cancelroom` use kare."
+            )
+            return
+
+        if user.id in multiplayer_manager.user_to_room:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="⚠️ Aap pehle se kisi active room me joined hain!"
+            )
+            return
+
+        room = multiplayer_manager.create_room(chat.id, user.id, user.first_name)
+        if not room:
+            await context.bot.send_message(chat_id=chat.id, text="❌ Room create nahi ho saka.")
+            return
+
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"👑 *BATTLE ROYALE ROOM LOBBY*\n"
+                 f"━━━━━━━━━━━━━━━━━━━━\n"
+                 f"👑 *Host:* {user.first_name}\n"
+                 f"🎯 *Mode:* Elimination (Last Player Standing)\n\n"
+                 f"👥 *Players Joined (1):*\n"
+                 f"1. {user.first_name}\n\n"
+                 f"Dusre log *Join Room* daba kar shamil hon!",
+            parse_mode="Markdown",
+            reply_markup=get_room_lobby_markup(chat.id)
+        )
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
