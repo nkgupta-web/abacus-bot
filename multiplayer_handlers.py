@@ -1,13 +1,21 @@
 import time
 import asyncio
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatType
 
 from config import LEVEL_SPECS
 from math_engine import generate_question
-from database import record_correct_answer, get_or_create_player
+from database import (
+    record_correct_answer,
+    get_or_create_player,
+    record_mp_match_played,
+    record_mp_match_win,
+)
 from multiplayer_mgr import multiplayer_manager, RoomTurn, RoomPlayer
+
+logger = logging.getLogger(__name__)
 
 def get_room_lobby_markup(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -27,30 +35,40 @@ async def cmd_create_room(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
 
     if chat.type == ChatType.PRIVATE:
-        await update.message.reply_text("Room mode group chats ke liye hai! Mujhe kisi group me add karke `/game` try karo.")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Room mode group chats ke liye hai! Mujhe kisi group me add karke `/game` try karo."
+        )
         return
 
     if multiplayer_manager.get_room(chat.id):
-        await update.message.reply_text("⚠️ Is group me already ek room chal raha hai! Use cancel karne ke liye host `/cancelroom` use kare.")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="⚠️ Is group me already ek room chal raha hai! Use cancel karne ke liye host `/cancelroom` use kare."
+        )
         return
 
     if user.id in multiplayer_manager.user_to_room:
-        await update.message.reply_text("⚠️ Aap pehle se kisi active room me joined hain!")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="⚠️ Aap pehle se kisi active room me joined hain!"
+        )
         return
 
     room = multiplayer_manager.create_room(chat.id, user.id, user.first_name)
     if not room:
-        await update.message.reply_text("❌ Room create nahi ho saka.")
+        await context.bot.send_message(chat_id=chat.id, text="❌ Room create nahi ho saka.")
         return
 
-    await update.message.reply_text(
-        f"👑 *BATTLE ROYALE ROOM LOBBY*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👑 *Host:* {user.first_name}\n"
-        f"🎯 *Mode:* Elimination (Last Player Standing)\n\n"
-        f"👥 *Players Joined (1):*\n"
-        f"1. {user.first_name}\n\n"
-        f"Dusre log *Join Room* daba kar shamil hon!",
+    await context.bot.send_message(
+        chat_id=chat.id,
+        text=f"👑 *BATTLE ROYALE ROOM LOBBY*\n"
+             f"━━━━━━━━━━━━━━━━━━━━\n"
+             f"👑 *Host:* {user.first_name}\n"
+             f"🎯 *Mode:* Elimination (Last Player Standing)\n\n"
+             f"👥 *Players Joined (1):*\n"
+             f"1. {user.first_name}\n\n"
+             f"Dusre log *Join Room* daba kar shamil hon!",
         parse_mode="Markdown",
         reply_markup=get_room_lobby_markup(chat.id)
     )
@@ -155,6 +173,13 @@ async def start_multiplayer_match(chat_id: int, context: ContextTypes.DEFAULT_TY
     room.current_level = 1
     room.is_sudden_death = False
 
+    # Track match played for every participant
+    for p in room.players.values():
+        try:
+            await record_mp_match_played(p.user_id, p.username)
+        except Exception as e:
+            logger.error(f"Error recording mp match played: {e}")
+
     await context.bot.send_message(
         chat_id=chat_id,
         text="🚀 *BATTLE ROYALE STARTED!*\n\n"
@@ -200,9 +225,9 @@ async def run_next_player_turn(chat_id: int, context: ContextTypes.DEFAULT_TYPE)
             return
 
         current_uid = room.round_start_active_ids[room.current_turn_index]
-        player = room.players[current_uid]
+        player = room.players.get(current_uid)
 
-        if not player.is_alive:
+        if not player or not player.is_alive:
             room.current_turn_index += 1
             asyncio.create_task(run_next_player_turn(chat_id, context))
             return
@@ -211,8 +236,9 @@ async def run_next_player_turn(chat_id: int, context: ContextTypes.DEFAULT_TYPE)
         spec = LEVEL_SPECS.get(effective_level, LEVEL_SPECS[20])
         q_text, ans = generate_question(effective_level)
 
+        display_tag = f"@{player.username}" if player.username else player.first_name
         msg_text = (
-            f"👤 *TURN: {player.first_name}* (@{player.username})\n"
+            f"👤 *TURN: {player.first_name}* ({display_tag})\n"
             f"🎯 Level Q{room.current_level}\n\n"
             f"{q_text}\n\n"
             f"⏱️ `{spec.time_limit} seconds`"
@@ -263,13 +289,16 @@ async def handle_mp_turn_timeout(
 
         room.current_turn_index += 1
 
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"⏰ *TIME'S UP!*\n"
-             f"❌ *{player_name}* time pe answer nahi de paya aur *ELIMINATE* ho gaya!\n"
-             f"✅ Sahi Answer: `{correct_ans}`",
-        parse_mode="Markdown"
-    )
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏰ *TIME'S UP!*\n"
+                 f"❌ *{player_name}* time pe answer nahi de paya aur *ELIMINATE* ho gaya!\n"
+                 f"✅ Sahi Answer: `{correct_ans}`",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Error sending mp timeout: {e}")
 
     await run_next_player_turn(chat_id, context)
 
@@ -290,10 +319,13 @@ async def handle_mp_message_answer(update: Update, context: ContextTypes.DEFAULT
     except ValueError:
         return False
 
+    time_taken = 0.0
+    player = None
+
     async with room.lock:
         turn = room.current_turn
         if not turn or turn.is_resolved or turn.player_id != user_id:
-            return False
+            return True
 
         if val != turn.correct_answer:
             return True
@@ -303,16 +335,23 @@ async def handle_mp_message_answer(update: Update, context: ContextTypes.DEFAULT
             turn.timer_task.cancel()
 
         time_taken = max(0.1, round(time.time() - turn.start_time, 2))
-        player = room.players[user_id]
-        player.current_round_time = time_taken
+        player = room.players.get(user_id)
+        if player:
+            player.current_round_time = time_taken
 
         room.current_turn_index += 1
 
-    # Instant XP award
+    if not player:
+        return True
+
     effective_lvl = min(20, room.current_level)
     spec = LEVEL_SPECS.get(effective_lvl, LEVEL_SPECS[20])
-    earned_xp = spec.xp_reward
-    await record_correct_answer(user_id, player.username, earned_xp)
+    earned_xp = spec.base_xp
+
+    try:
+        await record_correct_answer(user_id, player.username, earned_xp)
+    except Exception as e:
+        logger.error(f"Error recording MP XP: {e}")
 
     await message.reply_text(
         f"✅ *CORRECT!* {player.first_name} ne `{time_taken}s` me solve kiya!\n"
@@ -336,7 +375,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
             p.cumulative_time += p.current_round_time
             p.current_round_time = 0.0
 
-        # CASE 2: Everyone eliminated in Level 1
+        # Case 1: Sabhi round 1 me eliminate ho gaye
         if len(survivors) == 0 and completed_level == 1 and not room.is_sudden_death:
             multiplayer_manager.cleanup_room(chat_id)
             await context.bot.send_message(
@@ -347,7 +386,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
             )
             return
 
-        # CASE 3: Everyone eliminated in Level N (N > 1)
+        # Case 2: Round N me sabhi eliminate ho gaye (Tiebreaker)
         if len(survivors) == 0:
             candidates = [room.players[uid] for uid in room.round_start_active_ids]
             min_time = min(p.cumulative_time for p in candidates)
@@ -362,6 +401,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
                 w = winners[0]
                 bonus_xp = room.initial_player_count * completed_level * 10
                 await record_correct_answer(w.user_id, w.username, bonus_xp)
+                await record_mp_match_win(w.user_id, w.username)
 
                 text = (
                     f"💥 *Q{completed_level} ME SABHI ELIMINATE HO GAYE!*\n\n"
@@ -376,6 +416,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
                 bonus_xp = (room.initial_player_count * completed_level * 10) // len(winners)
                 for w in winners:
                     await record_correct_answer(w.user_id, w.username, bonus_xp)
+                    await record_mp_match_win(w.user_id, w.username)
 
                 text = (
                     f"💥 *Q{completed_level} ME SABHI ELIMINATE HO GAYE!*\n\n"
@@ -390,11 +431,12 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
             await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=get_mp_restart_markup())
             return
 
-        # CASE 1 & 4: Exactly one player remains alive
+        # Case 3: Sirf ek player bacha (Champion)
         if len(survivors) == 1:
             winner = survivors[0]
             bonus_xp = room.initial_player_count * completed_level * 15
             await record_correct_answer(winner.user_id, winner.username, bonus_xp)
+            await record_mp_match_win(winner.user_id, winner.username)
 
             text = (
                 f"🏆 *VICTORY! LAST PLAYER STANDING!*\n\n"
@@ -408,7 +450,7 @@ async def evaluate_level_completion(chat_id: int, context: ContextTypes.DEFAULT_
             await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=get_mp_restart_markup())
             return
 
-        # Progress to Next Level
+        # Next Level setup
         if room.current_level >= 20:
             room.is_sudden_death = True
             room.sudden_death_round += 1

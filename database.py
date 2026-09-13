@@ -9,9 +9,20 @@ async def init_db() -> None:
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 total_xp INTEGER DEFAULT 0,
-                correct_answers INTEGER DEFAULT 0
+                correct_answers INTEGER DEFAULT 0,
+                mp_played INTEGER DEFAULT 0,
+                mp_wins INTEGER DEFAULT 0
             )
         """)
+        # Safe column additions for existing production databases
+        try:
+            await db.execute("ALTER TABLE players ADD COLUMN mp_played INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE players ADD COLUMN mp_wins INTEGER DEFAULT 0")
+        except Exception:
+            pass
         await db.commit()
 
 async def get_or_create_player(user_id: int, username: Optional[str]) -> Dict[str, Any]:
@@ -27,11 +38,21 @@ async def get_or_create_player(user_id: int, username: Optional[str]) -> Dict[st
                 return dict(row)
 
         await db.execute(
-            "INSERT INTO players (user_id, username, total_xp, correct_answers) VALUES (?, ?, 0, 0)",
+            """
+            INSERT INTO players (user_id, username, total_xp, correct_answers, mp_played, mp_wins)
+            VALUES (?, ?, 0, 0, 0, 0)
+            """,
             (user_id, clean_username)
         )
         await db.commit()
-        return {"user_id": user_id, "username": clean_username, "total_xp": 0, "correct_answers": 0}
+        return {
+            "user_id": user_id,
+            "username": clean_username,
+            "total_xp": 0,
+            "correct_answers": 0,
+            "mp_played": 0,
+            "mp_wins": 0
+        }
 
 async def record_correct_answer(user_id: int, username: Optional[str], xp_gained: int) -> Dict[str, Any]:
     player = await get_or_create_player(user_id, username)
@@ -49,11 +70,29 @@ async def record_correct_answer(user_id: int, username: Optional[str], xp_gained
     player["correct_answers"] = new_correct
     return player
 
+async def record_mp_match_played(user_id: int, username: Optional[str]) -> None:
+    player = await get_or_create_player(user_id, username)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE players SET mp_played = mp_played + 1, username = ? WHERE user_id = ?",
+            (username or player["username"], user_id)
+        )
+        await db.commit()
+
+async def record_mp_match_win(user_id: int, username: Optional[str]) -> None:
+    player = await get_or_create_player(user_id, username)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE players SET mp_wins = mp_wins + 1, username = ? WHERE user_id = ?",
+            (username or player["username"], user_id)
+        )
+        await db.commit()
+
 async def get_leaderboard(limit: int = 10) -> List[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT user_id, username, total_xp, correct_answers FROM players ORDER BY total_xp DESC LIMIT ?",
+            "SELECT user_id, username, total_xp, correct_answers, mp_played, mp_wins FROM players ORDER BY total_xp DESC LIMIT ?",
             (limit,)
         ) as cursor:
             rows = await cursor.fetchall()

@@ -41,13 +41,24 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     player = await get_or_create_player(user.id, username)
     level, badge, next_level_xp, xp_needed = get_level_progress(player["total_xp"])
 
+    mp_played = player.get("mp_played", 0)
+    mp_wins = player.get("mp_wins", 0)
+    win_rate = f"{(mp_wins / mp_played * 100):.1f}%" if mp_played > 0 else "0.0%"
+
     text = (
-        f"👤 @{player['username']}\n"
-        f"🎖️ {badge} (Lvl {level})\n"
-        f"⭐ {player['total_xp']:,} XP  •  ✅ {player['correct_answers']} Solved\n"
-        f"📈 Next: {next_level_xp:,} XP (🔥 {xp_needed:,} left)"
+        f"👤 *PLAYER PROFILE: @{player['username']}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎖️ {badge} (Level {level})\n"
+        f"⭐ Total XP: *{player['total_xp']:,}*\n"
+        f"📈 Next Level: *{next_level_xp:,} XP* ({xp_needed:,} left)\n\n"
+        f"⚡ *Classic Solo:*\n"
+        f"✅ Solved: *{player['correct_answers']:,}*\n\n"
+        f"👑 *Battle Royale:*\n"
+        f"🎮 Matches: *{mp_played}*\n"
+        f"🏆 Wins: *{mp_wins}*\n"
+        f"🎯 Win Rate: *{win_rate}*"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     rows = await get_leaderboard(10)
