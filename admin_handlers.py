@@ -300,19 +300,30 @@ async def cmd_playerinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     p_id = player["user_id"]
-    p_name = player.get("username") or display_name or "Unknown"
+    p_username = player.get("username")
     p_xp = player.get("total_xp", 0)
     p_solves = player.get("correct_answers", 0)
     p_played = player.get("mp_played", 0)
     p_wins = player.get("mp_wins", 0)
+
+    # Real first_name nikaalna
+    real_name = display_name
+    if not real_name or real_name == p_username:
+        try:
+            tg_chat = await context.bot.get_chat(p_id)
+            real_name = tg_chat.first_name
+            if tg_chat.last_name:
+                real_name += f" {tg_chat.last_name}"
+        except Exception:
+            real_name = p_username or f"User_{p_id}"
 
     level, badge, _, xp_needed = get_level_progress(p_xp)
     win_rate = f"{(p_wins / p_played * 100):.2f}%" if p_played > 0 else "0.00%"
 
     text = (
         "👤 *PLAYER INFO*\n\n"
-        f"• *Name:* {display_name or p_name}\n"
-        f"• *Username:* @{player.get('username') if player.get('username') else 'None'}\n"
+        f"• *Name:* {real_name}\n"
+        f"• *Username:* @{p_username if p_username else 'None'}\n"
         f"• *User ID:* `{p_id}`\n\n"
         "🏆 *PROGRESS*\n"
         f"• *Level:* {level}\n"
