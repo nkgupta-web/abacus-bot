@@ -2,42 +2,10 @@ import ast
 import random
 from collections import deque
 from typing import Tuple, Optional, Deque, List
-from dataclasses import dataclass
+
+from config import LEVEL_SPECS
 
 _recent_questions: Deque[str] = deque(maxlen=80)
-
-@dataclass(frozen=True)
-class QuestionDifficultyRule:
-    max_digits: int
-    total_ops: int
-    high_ops: int
-    max_parens: int
-
-# =========================================================
-# EXACT 20 QUESTION LEVELS (Q1 - Q20)
-# =========================================================
-QUESTION_LEVEL_SPECS = {
-    1:  QuestionDifficultyRule(max_digits=1, total_ops=1,  high_ops=0, max_parens=0),
-    2:  QuestionDifficultyRule(max_digits=1, total_ops=2,  high_ops=0, max_parens=0),
-    3:  QuestionDifficultyRule(max_digits=2, total_ops=2,  high_ops=1, max_parens=0),
-    4:  QuestionDifficultyRule(max_digits=2, total_ops=3,  high_ops=1, max_parens=0),
-    5:  QuestionDifficultyRule(max_digits=2, total_ops=4,  high_ops=1, max_parens=0),
-    6:  QuestionDifficultyRule(max_digits=2, total_ops=4,  high_ops=2, max_parens=0),
-    7:  QuestionDifficultyRule(max_digits=3, total_ops=5,  high_ops=2, max_parens=0),
-    8:  QuestionDifficultyRule(max_digits=3, total_ops=6,  high_ops=2, max_parens=0),
-    9:  QuestionDifficultyRule(max_digits=3, total_ops=6,  high_ops=3, max_parens=0),
-    10: QuestionDifficultyRule(max_digits=3, total_ops=7,  high_ops=3, max_parens=1),
-    11: QuestionDifficultyRule(max_digits=4, total_ops=7,  high_ops=3, max_parens=1),
-    12: QuestionDifficultyRule(max_digits=4, total_ops=8,  high_ops=4, max_parens=1),
-    13: QuestionDifficultyRule(max_digits=4, total_ops=8,  high_ops=4, max_parens=1),
-    14: QuestionDifficultyRule(max_digits=4, total_ops=9,  high_ops=5, max_parens=2),
-    15: QuestionDifficultyRule(max_digits=4, total_ops=9,  high_ops=5, max_parens=2),
-    16: QuestionDifficultyRule(max_digits=4, total_ops=10, high_ops=5, max_parens=2),
-    17: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=5, max_parens=3),
-    18: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-    19: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-    20: QuestionDifficultyRule(max_digits=5, total_ops=10, high_ops=6, max_parens=3),
-}
 
 def safe_bodmas_eval(expr_str: str) -> Optional[int]:
     clean_expr = (
@@ -74,52 +42,23 @@ def safe_bodmas_eval(expr_str: str) -> Optional[int]:
     except Exception:
         return None
 
-def get_number(level: int, digits_max: int, is_multiplier: bool = False, is_divisor: bool = False) -> int:
+def get_number(digits_max: int, is_multiplier: bool = False, is_divisor: bool = False) -> int:
     if is_divisor:
-        if digits_max <= 2:
-            return random.randint(2, 9)
-        elif digits_max == 3:
-            return random.randint(3, 20)
-        elif digits_max == 4:
-            return random.randint(5, 50)
-        else:
-            return random.randint(12, 99)
+        return random.randint(2, 9) if digits_max <= 2 else random.randint(2, 15)
 
     if is_multiplier:
         if digits_max == 1:
             return random.randint(2, 9)
-        if digits_max <= 3:
+        elif digits_max <= 3:
             return random.randint(2, 12)
-        return random.randint(15, 60) if level >= 18 else random.randint(3, 25)
+        return random.randint(3, 20)
 
     if digits_max == 1:
         return random.randint(1, 9)
 
     low = 10 ** (digits_max - 1)
     high = (10 ** digits_max) - 1
-
-    if level == 19:
-        low = max(low, 35000)
-    elif level == 20:
-        low = max(low, 65000)
-
     return random.randint(low, high)
-
-def pick_operator_slots(total_ops: int, high_count: int, level: int) -> List[str]:
-    low_count = total_ops - high_count
-    ops = (["HIGH"] * high_count) + (["LOW"] * low_count)
-    random.shuffle(ops)
-
-    concrete_ops = []
-    for item in ops:
-        if item == "HIGH":
-            if level == 20:
-                concrete_ops.append("×" if random.random() < 0.70 else "÷")
-            else:
-                concrete_ops.append(random.choice(["×", "÷"]))
-        else:
-            concrete_ops.append(random.choice(["+", "−"]))
-    return concrete_ops
 
 def apply_parentheses(tokens: List[str], max_parens: int) -> List[str]:
     if max_parens <= 0 or len(tokens) < 5:
@@ -129,12 +68,17 @@ def apply_parentheses(tokens: List[str], max_parens: int) -> List[str]:
     applied = 0
     attempts = 0
 
-    while applied < max_parens and attempts < 15:
+    while applied < max_parens and attempts < 20:
         attempts += 1
+        # Random pair around 2 adjacent numbers with their operator
         start_idx = random.randrange(0, len(result) - 2, 2)
         end_idx = start_idx + 2
 
+        # Overlapping check
         if not result[start_idx].startswith("(") and not result[end_idx].endswith(")"):
+            # Avoid placing parens that cause clean division to break
+            if end_idx + 1 < len(result) and result[end_idx + 1] == "÷":
+                continue
             result[start_idx] = "(" + result[start_idx]
             result[end_idx] = result[end_idx] + ")"
             applied += 1
@@ -143,27 +87,53 @@ def apply_parentheses(tokens: List[str], max_parens: int) -> List[str]:
 
 def generate_question(level: int) -> Tuple[str, int]:
     q_level = max(1, min(20, int(level)))
-    rule = QUESTION_LEVEL_SPECS[q_level]
+    spec = LEVEL_SPECS.get(q_level, LEVEL_SPECS[20])
 
-    for _ in range(1200):
-        ops = pick_operator_slots(rule.total_ops, rule.high_ops, q_level)
-        tokens: List[str] = [str(get_number(q_level, rule.max_digits))]
+    digits_max = spec.digits_max
+    total_ops = spec.total_ops
+    high_ops = spec.high_ops
+    parens_pairs = spec.parens_pairs
 
-        for op in ops:
-            if op == "÷":
-                divisor = get_number(q_level, rule.max_digits, is_divisor=True)
-                tokens.append("÷")
-                tokens.append(str(divisor))
-            elif op == "×":
-                multiplier = get_number(q_level, rule.max_digits, is_multiplier=True)
-                tokens.append("×")
-                tokens.append(str(multiplier))
+    # Handcrafted early levels for speed & zero-wait latency
+    if q_level == 1:
+        a, b = random.randint(1, 9), random.randint(1, 9)
+        return f"{a} + {b} = ?", a + b
+
+    if q_level == 2:
+        a, b, c = random.randint(2, 9), random.randint(1, 9), random.randint(1, 9)
+        if a + b - c > 0 and random.random() > 0.5:
+            return f"{a} + {b} − {c} = ?", a + b - c
+        return f"{a} + {b} + {c} = ?", a + b + c
+
+    for _ in range(300):
+        # Operators distribution
+        low_count = total_ops - high_ops
+        slot_types = (["HIGH"] * high_ops) + (["LOW"] * low_count)
+        random.shuffle(slot_types)
+
+        tokens: List[str] = [str(get_number(digits_max))]
+
+        for slot in slot_types:
+            if slot == "HIGH":
+                op = "×" if random.random() < 0.65 else "÷"
+                if op == "÷":
+                    divisor = get_number(digits_max, is_divisor=True)
+                    # Guaranteed integer division: multiply previous token
+                    prev_val = int(tokens[-1].strip("()")) if tokens[-1].strip("()").isdigit() else random.randint(2, 20)
+                    tokens[-1] = str(prev_val * divisor)
+                    tokens.append("÷")
+                    tokens.append(str(divisor))
+                else:
+                    mult = get_number(digits_max, is_multiplier=True)
+                    tokens.append("×")
+                    tokens.append(str(mult))
             else:
+                op = random.choice(["+", "−"])
                 tokens.append(op)
-                tokens.append(str(get_number(q_level, rule.max_digits)))
+                tokens.append(str(get_number(digits_max)))
 
-        if rule.max_parens > 0:
-            tokens = apply_parentheses(tokens, rule.max_parens)
+        if parens_pairs > 0:
+            tokens = apply_parentheses(tokens, parens_pairs)
 
         raw_expr = " ".join(tokens)
         ans = safe_bodmas_eval(raw_expr)
@@ -171,6 +141,7 @@ def generate_question(level: int) -> Tuple[str, int]:
         if ans is None:
             continue
 
+        # Prevent negative answers for beginner/intermediate tiers
         if q_level <= 6 and ans < 0:
             continue
 
@@ -180,4 +151,6 @@ def generate_question(level: int) -> Tuple[str, int]:
         _recent_questions.append(raw_expr)
         return f"{raw_expr} = ?", ans
 
-    return "25 + 35 = ?", 60
+    # Safe fallback matching digits
+    a, b = get_number(digits_max), get_number(digits_max)
+    return f"{a} + {b} = ?", a + b

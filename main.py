@@ -1,17 +1,22 @@
 import os
 import asyncio
 import logging
+import html
+import traceback
 from aiohttp import web
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ChatMemberHandler,
     filters,
+    ContextTypes,
 )
 
-from config import BOT_TOKEN
-from database import init_db
+from config import BOT_TOKEN, OWNER_ID
+from database import init_db, register_chat, unregister_chat
 from handlers import (
     cmd_start,
     cmd_help,
@@ -22,7 +27,6 @@ from handlers import (
     on_restart_callback,
     on_mode_select_callback,
     handle_message_answer,
-    restore_xp_command,
 )
 from multiplayer_handlers import (
     cmd_create_room,
@@ -31,6 +35,22 @@ from multiplayer_handlers import (
     handle_room_callback,
     handle_mp_message_answer,
 )
+from admin_handlers import (
+    cmd_owner,
+    cmd_addadmin,
+    cmd_removeadmin,
+    cmd_admins,
+    cmd_botstats,
+    cmd_maintenance,
+    cmd_broadcast,
+    cmd_setxp,
+    cmd_addxp,
+    cmd_playerinfo,
+    cmd_resetstats,
+    cmd_setstats,
+    cmd_activematches,
+    cmd_stopmatch,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -38,17 +58,66 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Render health check ping
 async def handle_ping(request):
     return web.Response(text="Abacus Bot is Running!")
 
-async def unified_message_router(update, context):
+# Unified message router for answers
+async def unified_message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-    # Pehle check karo agar multiplayer chal raha hai
     handled = await handle_mp_message_answer(update, context)
     if not handled:
-        # Nahi toh normal classic game ko pass karo
         await handle_message_answer(update, context)
+
+# --- OWNER NOTIFICATIONS & LISTENERS ---
+
+async def track_chat_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Group add ya remove hone par owner ko DM bhejta hai aur database update karta hai."""
+    result = update.my_chat_member
+    if not result:
+        return
+
+    chat = result.chat
+    new_status = result.new_chat_member.status
+    old_status = result.old_chat_member.status
+
+    if new_status in ["member", "administrator"] and old_status not in ["member", "administrator"]:
+        await register_chat(chat.id, chat.type)
+        try:
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"➕ *Added to Group!*\n• *Title:* `{chat.title}`\n• *Chat ID:* `{chat.id}`\n• *Type:* `{chat.type}`",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send join alert: {e}")
+
+    elif new_status in ["left", "kicked"]:
+        await unregister_chat(chat.id)
+        try:
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"➖ *Removed from Group!*\n• *Title:* `{chat.title}`\n• *Chat ID:* `{chat.id}`",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send leave alert: {e}")
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unhandled bot crashes direct owner ke DM me aayenge."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+    err_preview = html.escape(tb_string[-3000:])
+    try:
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"🚨 <b>SYSTEM CRASH ALERT</b>\n\n<pre>{err_preview}</pre>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 async def main() -> None:
     await init_db()
@@ -67,19 +136,39 @@ async def main() -> None:
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Core Commands
+    # Automatic listeners & Error handlers
+    app.add_handler(ChatMemberHandler(track_chat_status, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_error_handler(error_handler)
+
+    # Core User Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("game", cmd_game))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("setxp", restore_xp_command))
 
     # Room Direct Commands
     app.add_handler(CommandHandler("room", cmd_create_room))
     app.add_handler(CommandHandler("cancelroom", cmd_cancelroom))
     app.add_handler(CommandHandler("leaveroom", cmd_leaveroom))
+
+    # Owner & Admin Commands (admin_handlers.py se)
+    app.add_handler(CommandHandler("owner", cmd_owner))
+    app.add_handler(CommandHandler("addadmin", cmd_addadmin))
+    app.add_handler(CommandHandler("removeadmin", cmd_removeadmin))
+    app.add_handler(CommandHandler("admins", cmd_admins))
+    app.add_handler(CommandHandler("botstats", cmd_botstats))
+    app.add_handler(CommandHandler("maintenance", cmd_maintenance))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+
+    app.add_handler(CommandHandler("setxp", cmd_setxp))
+    app.add_handler(CommandHandler("addxp", cmd_addxp))
+    app.add_handler(CommandHandler("playerinfo", cmd_playerinfo))
+    app.add_handler(CommandHandler("resetstats", cmd_resetstats))
+    app.add_handler(CommandHandler("setstats", cmd_setstats))
+    app.add_handler(CommandHandler("activematches", cmd_activematches))
+    app.add_handler(CommandHandler("stopmatch", cmd_stopmatch))
 
     # Button Callbacks
     app.add_handler(CallbackQueryHandler(on_mode_select_callback, pattern="^mode_"))
@@ -95,6 +184,17 @@ async def main() -> None:
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
         logger.info("Abacus Bot polling started successfully!")
+
+        # Bot start hone par owner ko DM alert bhejo
+        try:
+            await app.bot.send_message(
+                chat_id=OWNER_ID,
+                text="🟢 *Abacus Bot Online!*\nDatabase connected & system ready.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send startup alert: {e}")
+
         while True:
             await asyncio.sleep(3600)
 

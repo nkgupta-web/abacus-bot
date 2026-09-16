@@ -5,7 +5,13 @@ from telegram.constants import ChatType
 
 from config import LEVEL_SPECS
 from math_engine import generate_question
-from database import get_or_create_player, record_correct_answer, get_leaderboard
+from database import (
+    get_or_create_player, 
+    record_correct_answer, 
+    get_leaderboard,
+    get_player_by_target,
+    get_player_rank
+)
 from player_system import get_level_progress, calculate_player_level, get_level_badge
 from game_manager import game_manager, ActiveRound
 
@@ -30,15 +36,47 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Commands:*\n"
         "/game - Start session\n"
         "/cancel - Stop game\n"
-        "/profile - View your Level & XP\n"
+        "/profile - View Level & XP (Reply/Tag also works)\n"
         "/leaderboard - Global leaderboard"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    username = user.username or user.first_name
-    player = await get_or_create_player(user.id, username)
+    msg = update.effective_message
+    caller = update.effective_user
+
+    target_user_id = None
+    target_username = None
+    target_display_name = None
+
+    # 1. Reply Check
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        replied = msg.reply_to_message.from_user
+        target_user_id = replied.id
+        target_username = replied.username
+        target_display_name = replied.username or replied.first_name
+
+    # 2. Tag or Numeric ID Check (/profile @user ya /profile 12345)
+    elif context.args:
+        arg_target = context.args[0]
+        player_data = await get_player_by_target(arg_target)
+        if not player_data:
+            await msg.reply_text(f"❌ User `{arg_target}` database me nahi mila.", parse_mode="Markdown")
+            return
+
+        target_user_id = player_data["user_id"]
+        target_username = player_data.get("username")
+        target_display_name = target_username or f"User_{target_user_id}"
+
+    # 3. Default: Self
+    else:
+        target_user_id = caller.id
+        target_username = caller.username
+        target_display_name = caller.username or caller.first_name
+
+    # Target player data aur rank fetch karo
+    player = await get_or_create_player(target_user_id, target_username)
+    rank = await get_player_rank(target_user_id)
     level, badge, next_level_xp, xp_needed = get_level_progress(player["total_xp"])
 
     mp_played = player.get("mp_played", 0)
@@ -46,8 +84,9 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     win_rate = f"{(mp_wins / mp_played * 100):.1f}%" if mp_played > 0 else "0.0%"
 
     text = (
-        f"👤 *PLAYER PROFILE: @{player['username']}*\n"
+        f"👤 *PLAYER PROFILE: @{target_display_name}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏆 Global Rank: *#{rank}*\n"
         f"🎖️ {badge} (Level {level})\n"
         f"⭐ Total XP: *{player['total_xp']:,}*\n"
         f"📈 Next Level: *{next_level_xp:,} XP* ({xp_needed:,} left)\n\n"
@@ -342,45 +381,3 @@ async def handle_message_answer(update: Update, context: ContextTypes.DEFAULT_TY
         session.current_level += 1
 
     await start_new_round(chat.id, context)
-
-async def restore_xp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not user or not user.username or user.username.lower() != "doomsday_18_dec":
-        return
-
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text("Format: /setxp <username> <xp>")
-        return
-
-    target_user = context.args[0].replace("@", "").strip()
-    try:
-        new_xp = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("Invalid XP number!")
-        return
-
-    import aiosqlite
-    from config import DB_PATH
-    from player_system import calculate_player_level
-
-    new_lvl = calculate_player_level(new_xp)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT user_id FROM players WHERE LOWER(username) = LOWER(?)", 
-            (target_user,)
-        ) as cursor:
-            row = await cursor.fetchone()
-
-        if row:
-            await db.execute(
-                "UPDATE players SET total_xp = ? WHERE LOWER(username) = LOWER(?)",
-                (new_xp, target_user)
-            )
-            await db.commit()
-            await update.message.reply_text(f"✅ @{target_user} ka XP = {new_xp} (Level {new_lvl}) update ho gaya!")
-        else:
-            await update.message.reply_text(
-                f"❌ Player @{target_user} database me nahi mila.\n"
-                f"Use bolo ek baar group me koi question answer kare, fir command chalao."
-            )
