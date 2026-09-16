@@ -5,6 +5,7 @@ import os
 # Keep bot token in environment variables for deployment safety
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "8705986554:AAHy3PhzeTIxHzU7gm3x1PVAPY2mAOejkQI")
 DB_PATH: str = "abacus_game.db"
+OWNER_ID = 8810769292
 
 # Maximum limits matching Q20 ABSOLUTE MAX
 MAX_DIGITS: int = 5
