@@ -62,8 +62,12 @@ logger = logging.getLogger(__name__)
 async def handle_ping(request):
     return web.Response(text="Abacus Bot is Running!")
 
-# Unified message router for answers
+# Unified message router for answers & auto chat tracking
 async def unified_message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
     if not update.message or not update.message.text:
         return
     handled = await handle_mp_message_answer(update, context)

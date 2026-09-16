@@ -10,16 +10,22 @@ from database import (
     record_correct_answer, 
     get_leaderboard,
     get_player_by_target,
-    get_player_rank
+    get_player_rank,
+    register_chat
 )
 from player_system import get_level_progress, calculate_player_level, get_level_badge
 from game_manager import game_manager, ActiveRound
+import admin_handlers
 
 def get_start_again_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 START AGAIN", callback_data="start_game")]])
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.type == ChatType.PRIVATE:
+    chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text(
             "👋 Welcome to Abacus!\n\n"
             "Add me to any group and run /game to play!"
@@ -28,6 +34,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("🧮 Abacus Bot ready! Type /game to start.")
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
     text = (
         "📖 *ABACUS RULES*\n"
         "• Fastest correct answer wins XP.\n"
@@ -42,6 +52,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
     msg = update.effective_message
     caller = update.effective_user
 
@@ -74,7 +88,6 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target_username = caller.username
         target_display_name = caller.username or caller.first_name
 
-    # Target player data aur rank fetch karo
     player = await get_or_create_player(target_user_id, target_username)
     rank = await get_player_rank(target_user_id)
     level, badge, next_level_xp, xp_needed = get_level_progress(player["total_xp"])
@@ -100,6 +113,10 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
     rows = await get_leaderboard(10)
     if not rows:
         await update.message.reply_text("🏆 No players on the leaderboard yet!")
@@ -183,6 +200,13 @@ async def handle_round_timeout(chat_id: int, round_id: int, context: ContextType
 
 async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
+    if chat:
+        await register_chat(chat.id, chat.type)
+
+    if admin_handlers.MAINTENANCE_MODE:
+        await update.message.reply_text("🚧 *Game is currently under maintenance.* Please try again later!", parse_mode="Markdown")
+        return
+
     if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("This command must be run inside a group!")
         return
@@ -208,6 +232,10 @@ async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def on_mode_select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+
+    if admin_handlers.MAINTENANCE_MODE:
+        await query.edit_message_text("🚧 *Game is currently under maintenance.* Please try again later!", parse_mode="Markdown")
+        return
 
     if query.data == "mode_classic":
         chat_id = query.message.chat_id
@@ -282,6 +310,11 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def on_restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+
+    if admin_handlers.MAINTENANCE_MODE:
+        await query.answer("🚧 Game under maintenance hai!", show_alert=True)
+        return
+
     chat_id = update.effective_chat.id
 
     session = game_manager.get_session(chat_id)
